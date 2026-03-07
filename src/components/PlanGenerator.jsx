@@ -661,7 +661,6 @@ Markdown形式で出力してください。
             return;
         }
 
-        // Save context for the next app
         const projectData = {
             id: Date.now(),
             timestamp: new Date().toISOString(),
@@ -678,11 +677,12 @@ Markdown形式で出力してください。
         };
 
         try {
-            // Save to LocalStorage to simulate "Cloud/Database" for the suite
             localStorage.setItem('tlab_current_project', JSON.stringify(projectData));
-
-            alert(`🎉 連携データを保存しました！\n\n「${unitName}」の理念と計画を引き継いで、\n次の「授業案作成アプリ」で即座に作業を開始できます。`);
-
+            // Nova Lab Pro が iframeの親にいる場合、指導案作成アプリを開くよう通知
+            if (window.parent !== window) {
+                window.parent.postMessage({ type: 'TLAB_OPEN_APP', appId: 'lesson-plan' }, '*');
+            }
+            alert(`連携データを保存しました！\n\n「${unitName}」の計画を引き継いで、\n指導案作成アプリで作業を開始してください。`);
         } catch (err) {
             console.error(err);
             alert("データの保存に失敗しました");

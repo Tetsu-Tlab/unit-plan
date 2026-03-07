@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useApiKeyBridge } from '../hooks/useApiKeyBridge';
 import { BookOpen, Settings, School, GraduationCap, FileText, Upload, Sparkles, AlertCircle, Save, Heart, X, File as FileIcon } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '../lib/utils';
@@ -9,8 +10,12 @@ import remarkGfm from 'remark-gfm';
 import { saveAs } from 'file-saver';
 
 const PlanGenerator = () => {
-    const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
-    const [showSettings, setShowSettings] = useState(!apiKey);
+    const { apiKey, saveApiKey } = useApiKeyBridge();
+    const setApiKey = saveApiKey; // 既存コードとの互換性を保つ
+    const [showSettings, setShowSettings] = useState(false);
+    const [aiEnabled, setAiEnabled] = useState(() =>
+        localStorage.getItem('unitplan_ai_enabled') !== 'false'
+    );
     const [model, setModel] = useState('gemini-1.5-flash'); // Default stable model
     const [availableModels, setAvailableModels] = useState([
         { name: 'gemini-1.5-flash', displayName: 'Gemini 1.5 Flash (推奨)' },
@@ -40,8 +45,14 @@ const PlanGenerator = () => {
     const [generatedPlan, setGeneratedPlan] = useState('');
     const [isLoading, setIsLoading] = useState(false);
 
+    const toggleAi = () => {
+        const next = !aiEnabled;
+        setAiEnabled(next);
+        localStorage.setItem('unitplan_ai_enabled', String(next));
+    };
+
     useEffect(() => {
-        localStorage.setItem('gemini_api_key', apiKey);
+        if (apiKey) setShowSettings(false);
     }, [apiKey]);
 
     // API Key Handling
@@ -140,9 +151,12 @@ const PlanGenerator = () => {
     };
 
     const handleGenerate = async () => {
+        if (!aiEnabled) {
+            alert('AIがOFFになっています。ヘッダーのトグルボタンでONにしてください。');
+            return;
+        }
         if (!apiKey) {
-            alert('APIキーを設定してください');
-            setShowSettings(true);
+            alert('APIキーが未設定です。Nova Lab Pro の「設定・連携」タブでGemini APIキーを登録してください。');
             return;
         }
 
@@ -312,13 +326,37 @@ Markdown形式で出力してください。
                             Unit Plan Pro <span className="text-sm font-medium text-slate-400 ml-2">for Teachers</span>
                         </h1>
                     </div>
-                    <button
-                        onClick={() => setShowSettings(!showSettings)}
-                        className="p-2 hover:bg-slate-100 rounded-full transition-colors relative"
-                    >
-                        <Settings className="w-5 h-5 text-slate-600" />
-                        {!apiKey && <div className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full animate-pulse" />}
-                    </button>
+                    <div className="flex items-center gap-3">
+                        {/* AI ON/OFF トグル */}
+                        <button
+                            onClick={toggleAi}
+                            className={cn(
+                                "flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold transition-all border-2",
+                                aiEnabled && apiKey
+                                    ? "bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100"
+                                    : aiEnabled && !apiKey
+                                    ? "bg-amber-50 text-amber-700 border-amber-300 hover:bg-amber-100"
+                                    : "bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200"
+                            )}
+                            title={!apiKey ? "Nova Lab ProでAPIキーを設定してください" : aiEnabled ? "クリックでAIをOFF" : "クリックでAIをON"}
+                        >
+                            <div className={cn(
+                                "w-2 h-2 rounded-full",
+                                aiEnabled && apiKey ? "bg-emerald-500 animate-pulse" :
+                                aiEnabled && !apiKey ? "bg-amber-500 animate-pulse" :
+                                "bg-slate-400"
+                            )} />
+                            {aiEnabled
+                                ? apiKey ? "AI 稼働中" : "AI ON（キー未着）"
+                                : "AI OFF"}
+                        </button>
+                        <button
+                            onClick={() => setShowSettings(!showSettings)}
+                            className="p-2 hover:bg-slate-100 rounded-full transition-colors"
+                        >
+                            <Settings className="w-5 h-5 text-slate-600" />
+                        </button>
+                    </div>
                 </div>
             </header>
 
@@ -362,30 +400,22 @@ Markdown形式で出力してください。
                                             )}
                                         </div>
 
-                                        <div>
-                                            <label className="block text-xs font-semibold uppercase text-slate-500 mb-1">Gemini API Key</label>
-                                            <div className="flex gap-2">
-                                                <input
-                                                    type="password"
-                                                    value={apiKey}
-                                                    onChange={handleApiKeyChange}
-                                                    placeholder="AIキーを貼り付け..."
-                                                    className="flex-grow px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none transition-all w-full"
-                                                />
-                                                <button
-                                                    onClick={testConnection}
-                                                    disabled={!apiKey || connectionStatus === 'testing'}
-                                                    className={cn(
-                                                        "px-4 py-2 rounded-lg text-xs font-bold transition-all whitespace-nowrap min-w-[100px]",
-                                                        connectionStatus === 'success' ? "bg-emerald-100 text-emerald-700" :
-                                                            connectionStatus === 'error' ? "bg-red-100 text-red-700" :
-                                                                "bg-indigo-100 text-indigo-700 hover:bg-indigo-200"
-                                                    )}
-                                                >
-                                                    {connectionStatus === 'testing' ? '確認中...' :
-                                                        connectionStatus === 'success' ? '接続OK!' :
-                                                            connectionStatus === 'error' ? 'エラー' : '接続テスト'}
-                                                </button>
+                                        {/* APIキーはNova Lab Proから自動連携 */}
+                                        <div className={cn(
+                                            "flex items-center gap-3 p-3 rounded-lg border",
+                                            apiKey
+                                                ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+                                                : "bg-amber-50 border-amber-200 text-amber-800"
+                                        )}>
+                                            <div className={cn(
+                                                "w-2.5 h-2.5 rounded-full shrink-0",
+                                                apiKey ? "bg-emerald-500" : "bg-amber-400 animate-pulse"
+                                            )} />
+                                            <div className="text-xs font-semibold leading-snug">
+                                                {apiKey
+                                                    ? <>Gemini APIキー連携済み<br /><span className="font-normal opacity-70">Nova Lab Pro から自動取得</span></>
+                                                    : <>APIキー未取得<br /><span className="font-normal">Nova Lab Pro の「設定・連携」でキーを登録してください</span></>
+                                                }
                                             </div>
                                         </div>
                                     </div>
@@ -564,11 +594,13 @@ Markdown形式で出力してください。
 
                     <button
                         onClick={handleGenerate}
-                        disabled={isLoading}
+                        disabled={isLoading || !aiEnabled}
                         className={cn(
                             "w-full py-4 rounded-xl font-bold text-lg shadow-float transition-all transform active:scale-95 flex items-center justify-center gap-2",
                             isLoading
                                 ? "bg-slate-300 text-slate-500 cursor-not-allowed"
+                                : !aiEnabled
+                                ? "bg-slate-200 text-slate-400 cursor-not-allowed"
                                 : "bg-gradient-to-r from-indigo-600 to-violet-600 text-white hover:from-indigo-500 hover:to-violet-500"
                         )}
                     >
@@ -576,6 +608,10 @@ Markdown形式で出力してください。
                             <>
                                 <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                                 生成中...
+                            </>
+                        ) : !aiEnabled ? (
+                            <>
+                                <Settings className="w-5 h-5" /> AI OFF — ヘッダーのトグルでONにしてください
                             </>
                         ) : (
                             <>

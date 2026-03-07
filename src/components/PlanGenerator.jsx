@@ -31,13 +31,16 @@ const PlanGenerator = () => {
     const [classType, setClassType] = useState('regular');
     const [unitName, setUnitName] = useState('');
 
-    // Research & Local Context
-    const [researchTheme, setResearchTheme] = useState('');
-    const [teacherFocus, setTeacherFocus] = useState(''); // New: 先生のこだわり
+    const [teacherFocus, setTeacherFocus] = useState('');
 
-    // Files & Resources
-    const [guideContent, setGuideContent] = useState(''); // Text content
-    const [attachedFiles, setAttachedFiles] = useState([]); // Array of { name, type, data (base64) }
+    // 研究構想図・研究資料
+    const [researchFiles, setResearchFiles] = useState([]);       // PDF: { name, mimeType, data (base64) }
+    const [researchTextContent, setResearchTextContent] = useState(''); // Word → 抽出テキスト
+    const researchFileInputRef = useRef(null);
+
+    // 学習指導要領・教材資料
+    const [guideContent, setGuideContent] = useState('');
+    const [attachedFiles, setAttachedFiles] = useState([]);
     const fileInputRef = useRef(null);
     const previewRef = useRef(null);
 
@@ -54,6 +57,38 @@ const PlanGenerator = () => {
     useEffect(() => {
         if (apiKey) setShowSettings(false);
     }, [apiKey]);
+
+    // 研究構想図ファイルのアップロード処理
+    const handleResearchFileUpload = async (e) => {
+        const files = Array.from(e.target.files);
+        for (const file of files) {
+            if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+                const arrayBuffer = await file.arrayBuffer();
+                try {
+                    const result = await mammoth.extractRawText({ arrayBuffer });
+                    setResearchTextContent(prev =>
+                        prev + `\n\n--- [研究資料: ${file.name}] ---\n` + result.value
+                    );
+                } catch {
+                    alert(`${file.name} の読み込みに失敗しました。`);
+                }
+            } else if (file.type === 'application/pdf') {
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    const base64 = ev.target.result.split(',')[1];
+                    setResearchFiles(prev => [...prev, { name: file.name, mimeType: 'application/pdf', data: base64 }]);
+                };
+                reader.readAsDataURL(file);
+            } else {
+                alert('対応していないファイル形式です (PDF, Word のみ)');
+            }
+        }
+        if (researchFileInputRef.current) researchFileInputRef.current.value = '';
+    };
+
+    const removeResearchFile = (index) => {
+        setResearchFiles(prev => prev.filter((_, i) => i !== index));
+    };
 
     // API Key Handling
     const handleApiKeyChange = (e) => {
@@ -168,15 +203,19 @@ const PlanGenerator = () => {
 あなたは日本の公立学校における熟練した指導主事であり、授業改善のスペシャリストです。
 以下の条件に基づき、「最高品質の単元指導計画」を作成してください。
 
-## 重要な制約事項
-提供された「学習指導要領」や「教材テキスト」の内容（添付ファイルやテキスト入力）を**最優先**し、そこから該当する単元の範囲を特定して、内容に矛盾しない計画を立ててください。
+## ★最重要：校内研究構想図・研究資料の反映
+${researchFiles.length > 0 || researchTextContent
+    ? `添付された研究構想図・研究資料を必ず精読し、以下を単元計画の全体に貫いてください。
+- 研究テーマ・研究仮説・めざす子ども像
+- 研究の具体的な手立て・手法・授業スタイル
+- 研究が重視する評価の観点
+${researchTextContent ? `\n【研究資料テキスト】\n${researchTextContent}` : ''}`
+    : '（研究構想図は添付されていません。一般的な授業改善の視点で作成してください。）'
+}
 
-## 先生からのリクエスト・重視する点（最重要）
+## 先生からのリクエスト・重視する点
 「${teacherFocus || '特になし'}」
-※この点を単元の目標や評価、授業の展開に色濃く反映させてください。
-
-## 校内研究テーマ
-「${researchTheme || '特になし'}」
+※この点も単元の目標・評価・授業展開に反映させてください。
 
 ## 単元基本情報
 - 校種: ${schoolType === 'elementary' ? '小学校' : '中学校'}
@@ -186,12 +225,12 @@ const PlanGenerator = () => {
 - 学級タイプ: ${classType}
   ${classType === 'regular' ? '(通常学級 - UD視点での支援を記述)' : '(特別支援学級 - 特性に合わせた具体的かつ手厚い支援を記述)'}
 
-## 追加テキスト情報
-${guideContent}
+## 学習指導要領・教材資料（追加テキスト）
+${guideContent || '（テキスト入力なし）'}
 
 ## 出力フォーマット
 Markdown形式で出力してください。
-1. **単元設定の理由** (先生のこだわりや研究テーマとの関連、児童の実態分析を含む)
+1. **単元設定の理由** (研究構想図との関連・先生のこだわり・児童の実態分析を含む)
 2. **単元の目標** (知識・技能 / 思考・判断・表現 / 主体的に学習に取り組む態度)
 3. **単元指導計画表** (Table形式)
    カラム: [時, 学習活動（児童・生徒の変容）, 指導上の留意点・支援（教師の手立て）, 評価（規準と方法）, UD・個別支援]
@@ -201,14 +240,14 @@ Markdown形式で出力してください。
             // Construct Payload
             const parts = [{ text: systemPrompt }];
 
-            // Append PDF files as inline data
+            // 研究構想図PDFを最初に追加（高優先度）
+            researchFiles.forEach(file => {
+                parts.push({ inlineData: { mimeType: file.mimeType, data: file.data } });
+            });
+
+            // 学習指導要領・教材資料PDFを追加
             attachedFiles.forEach(file => {
-                parts.push({
-                    inlineData: {
-                        mimeType: file.mimeType,
-                        data: file.data
-                    }
-                });
+                parts.push({ inlineData: { mimeType: file.mimeType, data: file.data } });
             });
 
             // Use selected model
@@ -265,7 +304,8 @@ Markdown形式で出力してください。
             timestamp: new Date().toISOString(),
             context: {
                 schoolType, grade, subject, unitName, classType,
-                researchTheme, teacherFocus
+                teacherFocus,
+                hasResearchFiles: researchFiles.length > 0 || !!researchTextContent
             },
             content: {
                 guideContent,
@@ -432,21 +472,71 @@ Markdown形式で出力してください。
 
                     {/* Research & Vision */}
                     <div className="grid grid-cols-1 gap-4">
-                        <div className="bg-gradient-to-br from-indigo-600 to-violet-700 rounded-xl shadow-float text-white p-6 relative overflow-hidden group">
+                        {/* 研究構想図アップロード */}
+                        <div className="bg-gradient-to-br from-violet-600 to-indigo-700 rounded-xl shadow-float text-white p-6 relative overflow-hidden group">
                             <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
                                 <School className="w-24 h-24" />
                             </div>
-                            <h2 className="text-lg font-bold mb-1 flex items-center gap-2 relative z-10 text-white">
-                                <School className="w-5 h-5" /> 校内研究テーマ
+                            <h2 className="text-lg font-bold mb-1 flex items-center gap-2 relative z-10">
+                                <School className="w-5 h-5" /> 研究構想図・研究資料
                             </h2>
-                            <textarea
-                                value={researchTheme}
-                                onChange={(e) => setResearchTheme(e.target.value)}
-                                placeholder="例：自ら問いを見出し、協働して解決する児童の育成"
-                                className="w-full mt-2 px-3 py-2 bg-white/10 border border-white/20 rounded-lg text-white placeholder-indigo-200 focus:ring-2 focus:ring-white/50 focus:outline-none transition-all resize-none h-20 relative z-10 text-sm"
+                            <p className="text-xs text-indigo-200 mb-3 relative z-10">
+                                PDF または Word でアップロード。AIが研究の方向性を最優先で単元計画に反映します。
+                            </p>
+
+                            {/* アップロードボタン */}
+                            <input
+                                type="file"
+                                ref={researchFileInputRef}
+                                className="hidden"
+                                multiple
+                                accept=".pdf,.docx"
+                                onChange={handleResearchFileUpload}
                             />
+                            <button
+                                onClick={() => researchFileInputRef.current?.click()}
+                                className="relative z-10 flex items-center gap-2 px-4 py-2 bg-white/15 hover:bg-white/25 border border-white/30 rounded-lg text-sm font-bold transition-all"
+                            >
+                                <Upload className="w-4 h-4" /> ファイルを追加（PDF / Word）
+                            </button>
+
+                            {/* 追加済みファイル一覧 */}
+                            {(researchFiles.length > 0 || researchTextContent) && (
+                                <div className="relative z-10 mt-3 space-y-1">
+                                    {researchFiles.map((f, i) => (
+                                        <div key={i} className="flex items-center justify-between bg-white/15 rounded-lg px-3 py-1.5 text-xs">
+                                            <div className="flex items-center gap-2 overflow-hidden">
+                                                <FileIcon className="w-3 h-3 shrink-0" />
+                                                <span className="truncate">{f.name}</span>
+                                                <span className="opacity-60 shrink-0">PDF</span>
+                                            </div>
+                                            <button onClick={() => removeResearchFile(i)} className="opacity-60 hover:opacity-100 ml-2">
+                                                <X className="w-3 h-3" />
+                                            </button>
+                                        </div>
+                                    ))}
+                                    {researchTextContent && (
+                                        <div className="flex items-center justify-between bg-white/15 rounded-lg px-3 py-1.5 text-xs">
+                                            <div className="flex items-center gap-2">
+                                                <FileIcon className="w-3 h-3 shrink-0" />
+                                                <span>Wordファイル（テキスト抽出済み）</span>
+                                            </div>
+                                            <button onClick={() => setResearchTextContent('')} className="opacity-60 hover:opacity-100 ml-2">
+                                                <X className="w-3 h-3" />
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {researchFiles.length === 0 && !researchTextContent && (
+                                <p className="relative z-10 mt-3 text-xs text-indigo-300 italic">
+                                    ※ 未添付の場合は汎用的な単元計画を作成します
+                                </p>
+                            )}
                         </div>
 
+                        {/* 先生のこだわり */}
                         <div className="bg-gradient-to-br from-pink-500 to-rose-600 rounded-xl shadow-float text-white p-6 relative overflow-hidden group">
                             <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
                                 <Heart className="w-24 h-24" />

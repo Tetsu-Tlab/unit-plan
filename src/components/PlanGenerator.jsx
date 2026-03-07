@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApiKeyBridge } from '../hooks/useApiKeyBridge';
-import { BookOpen, Settings, School, GraduationCap, FileText, Upload, Sparkles, AlertCircle, Save, Heart, X, File as FileIcon, Mic, MicOff, ChevronRight, CheckCircle2, User, MessageCircle, Send, ChevronDown, ChevronUp, RotateCcw, Zap } from 'lucide-react';
+import { BookOpen, Settings, School, GraduationCap, FileText, Upload, Sparkles, AlertCircle, Save, Heart, X, File as FileIcon, Mic, MicOff, ChevronRight, CheckCircle2, User, MessageCircle, Send, ChevronDown, ChevronUp, RotateCcw, Zap, History } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '../lib/utils';
 import mammoth from 'mammoth';
@@ -54,6 +54,50 @@ const TEACHER_QUESTIONS = [
         icon: '💬'
     },
 ];
+
+// ───────────────────────────────────────────
+// ライン差分アルゴリズム（外部ライブラリ不要）
+// ───────────────────────────────────────────
+function lineDiff(oldStr, newStr) {
+    const oldLines = (oldStr || '').split('\n');
+    const newLines = (newStr || '').split('\n');
+    const result = [];
+    let o = 0, n = 0;
+
+    while (o < oldLines.length || n < newLines.length) {
+        if (o >= oldLines.length) {
+            result.push({ type: 'added', line: newLines[n++] });
+        } else if (n >= newLines.length) {
+            result.push({ type: 'removed', line: oldLines[o++] });
+        } else if (oldLines[o] === newLines[n]) {
+            result.push({ type: 'unchanged', line: oldLines[o] });
+            o++; n++;
+        } else {
+            // 前方5行以内で一致する行を探す
+            let inNew = -1, inOld = -1;
+            for (let k = 1; k <= 5; k++) {
+                if (inNew === -1 && n + k < newLines.length && newLines[n + k] === oldLines[o]) inNew = k;
+                if (inOld === -1 && o + k < oldLines.length && oldLines[o + k] === newLines[n]) inOld = k;
+            }
+            if (inNew !== -1 && (inOld === -1 || inNew <= inOld)) {
+                for (let k = 0; k < inNew; k++) result.push({ type: 'added', line: newLines[n++] });
+            } else if (inOld !== -1) {
+                for (let k = 0; k < inOld; k++) result.push({ type: 'removed', line: oldLines[o++] });
+            } else {
+                result.push({ type: 'removed', line: oldLines[o++] });
+                result.push({ type: 'added', line: newLines[n++] });
+            }
+        }
+    }
+    return result;
+}
+
+function countChanges(diff) {
+    return {
+        added:   diff.filter(d => d.type === 'added').length,
+        removed: diff.filter(d => d.type === 'removed').length,
+    };
+}
 
 // AI修正クイックチップ
 const QUICK_CHIPS = [
@@ -124,6 +168,11 @@ const PlanGenerator = () => {
 
     // レイアウトモード: 'design'（入力） | 'refine'（精錬）
     const [layoutMode, setLayoutMode] = useState('design');
+
+    // 変更履歴
+    const [planHistory, setPlanHistory] = useState([]); // [{id, ts, plan, label}]
+    const [showHistoryModal, setShowHistoryModal] = useState(false);
+    const [diffTarget, setDiffTarget] = useState(null); // 差分表示するhistory index
 
     // teacherProfile の1フィールドを更新
     const updateTeacherProfile = (key, value) => {
@@ -201,6 +250,11 @@ const PlanGenerator = () => {
     // 入力済み項目数
     const filledCount = TEACHER_QUESTIONS.filter(q => teacherProfile[q.key]?.trim()).length;
 
+    // 履歴に保存
+    const saveToHistory = (plan, label) => {
+        setPlanHistory(prev => [...prev, { id: Date.now(), ts: new Date(), plan, label }]);
+    };
+
     // チャット送信でAI修正
     const handleChatSend = async (instruction) => {
         const text = (instruction || chatInput).trim();
@@ -242,6 +296,7 @@ ${generatedPlan}
             if (data.error) throw new Error(data.error.message);
 
             const revised = data.candidates[0].content.parts[0].text;
+            saveToHistory(revised, text.length > 18 ? text.slice(0, 18) + '…' : text);
             setGeneratedPlan(revised);
             setChatMessages(prev => [...prev, { role: 'ai', content: '計画を更新しました ✅' }]);
         } catch (err) {
@@ -473,6 +528,7 @@ Markdown形式で出力してください。
             }
 
             const text = data.candidates[0].content.parts[0].text;
+            saveToHistory(text, '初回生成');
             setGeneratedPlan(text);
             setLayoutMode('refine');   // 生成完了 → 精錬モードへ
             setIsChatOpen(true);       // チャットを自動展開
@@ -490,7 +546,9 @@ Markdown形式で出力してください。
         if (!generatedPlan) return;
         const fileName = `${grade || ''}${subject || ''}_${unitName || '単元計画'}`;
         await exportToWord(fileName, generatedPlan, {
-            schoolType, grade, subject, unitName, researchTheme, teacherFocus
+            schoolType, grade, subject, unitName,
+            researchTheme: researchTextContent.slice(0, 200) || '（研究構想図添付）',
+            teacherFocus: Object.values(teacherProfile).filter(Boolean).join(' / ').slice(0, 200)
         });
     };
 
@@ -513,7 +571,7 @@ Markdown形式で出力してください。
             timestamp: new Date().toISOString(),
             context: {
                 schoolType, grade, subject, unitName, classType,
-                teacherFocus,
+                teacherFocus: Object.values(teacherProfile).filter(Boolean).join(' / ').slice(0, 200),
                 hasResearchFiles: researchFiles.length > 0 || !!researchTextContent
             },
             content: {
@@ -1069,6 +1127,14 @@ Markdown形式で出力してください。
                             {generatedPlan && (
                                 <div className="flex items-center gap-2">
                                     <span className="text-xs text-slate-400">修正回数: {chatMessages.filter(m => m.role === 'user').length}</span>
+                                    {planHistory.length > 0 && (
+                                        <button
+                                            onClick={() => setShowHistoryModal(true)}
+                                            className="text-xs flex items-center gap-1 text-slate-400 hover:text-violet-600 font-medium px-2 py-1 rounded transition-colors"
+                                        >
+                                            <History className="w-3 h-3" /> 履歴 ({planHistory.length})
+                                        </button>
+                                    )}
                                     <button
                                         onClick={() => navigator.clipboard.writeText(generatedPlan)}
                                         className="text-xs flex items-center gap-1 text-slate-400 hover:text-indigo-600 font-medium px-2 py-1 rounded transition-colors"
@@ -1219,6 +1285,144 @@ Markdown形式で出力してください。
                 </div>
 
             </main>
+
+            {/* ===== 変更履歴・差分表示モーダル ===== */}
+            <AnimatePresence>
+                {showHistoryModal && (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 backdrop-blur-sm p-4"
+                        onClick={(e) => { if (e.target === e.currentTarget) { setShowHistoryModal(false); setDiffTarget(null); } }}
+                    >
+                        <motion.div
+                            initial={{ scale: 0.95, y: 30, opacity: 0 }}
+                            animate={{ scale: 1, y: 0, opacity: 1 }}
+                            exit={{ scale: 0.95, y: 30, opacity: 0 }}
+                            transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+                            className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden"
+                        >
+                            {/* ヘッダー */}
+                            <div className="bg-gradient-to-r from-violet-600 to-indigo-600 px-6 py-4 flex items-center justify-between shrink-0">
+                                <div>
+                                    <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                                        <History className="w-5 h-5" /> 変更履歴・差分表示
+                                    </h2>
+                                    <p className="text-violet-200 text-xs mt-0.5">{planHistory.length} バージョン保存済み</p>
+                                </div>
+                                <button onClick={() => { setShowHistoryModal(false); setDiffTarget(null); }} className="p-2 hover:bg-white/20 rounded-full transition-colors">
+                                    <X className="w-5 h-5 text-white" />
+                                </button>
+                            </div>
+
+                            <div className="flex flex-1 min-h-0 overflow-hidden">
+                                {/* バージョン一覧（左） */}
+                                <div className="w-56 border-r border-slate-100 overflow-y-auto shrink-0 bg-slate-50">
+                                    {planHistory.map((h, i) => {
+                                        const isSelected = diffTarget === i;
+                                        const nextPlan = i < planHistory.length - 1 ? planHistory[i + 1].plan : generatedPlan;
+                                        const diff = lineDiff(h.plan, nextPlan);
+                                        const { added, removed } = countChanges(diff);
+                                        return (
+                                            <button
+                                                key={h.id}
+                                                onClick={() => setDiffTarget(isSelected ? null : i)}
+                                                className={cn(
+                                                    "w-full text-left px-4 py-3 border-b border-slate-100 transition-colors",
+                                                    isSelected ? "bg-violet-50 border-l-4 border-l-violet-500" : "hover:bg-white"
+                                                )}
+                                            >
+                                                <div className="flex items-center justify-between mb-1">
+                                                    <span className="text-xs font-bold text-slate-600">v{i + 1}</span>
+                                                    <span className="text-[10px] text-slate-400">
+                                                        {h.ts.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}
+                                                    </span>
+                                                </div>
+                                                <div className="text-xs text-slate-700 truncate mb-1">{h.label}</div>
+                                                {(added > 0 || removed > 0) && (
+                                                    <div className="flex gap-2 text-[10px] font-mono">
+                                                        {added > 0 && <span className="text-emerald-600">+{added}</span>}
+                                                        {removed > 0 && <span className="text-red-500">-{removed}</span>}
+                                                    </div>
+                                                )}
+                                            </button>
+                                        );
+                                    })}
+                                    <div className="w-full text-left px-4 py-3 bg-indigo-50 border-l-4 border-l-indigo-500">
+                                        <div className="flex items-center justify-between mb-1">
+                                            <span className="text-xs font-bold text-indigo-600">現在</span>
+                                            <span className="text-[10px] text-indigo-400">最新</span>
+                                        </div>
+                                        <div className="text-xs text-indigo-700">現在の計画</div>
+                                    </div>
+                                </div>
+
+                                {/* 差分ビュー（右） */}
+                                <div className="flex-1 overflow-y-auto p-5">
+                                    {diffTarget !== null ? (() => {
+                                        const h = planHistory[diffTarget];
+                                        const nextPlan = diffTarget < planHistory.length - 1 ? planHistory[diffTarget + 1].plan : generatedPlan;
+                                        const diff = lineDiff(h.plan, nextPlan);
+                                        const { added, removed } = countChanges(diff);
+                                        return (
+                                            <div className="space-y-4">
+                                                <div className="flex items-center justify-between">
+                                                    <div>
+                                                        <span className="font-bold text-slate-700">
+                                                            v{diffTarget + 1} → {diffTarget < planHistory.length - 1 ? `v${diffTarget + 2}` : '現在'}
+                                                        </span>
+                                                        <span className="ml-3 text-xs text-slate-500">「{h.label}」からの変更</span>
+                                                    </div>
+                                                    <div className="flex gap-3 text-sm font-mono font-bold">
+                                                        <span className="text-emerald-600">+{added} 行</span>
+                                                        <span className="text-red-500">-{removed} 行</span>
+                                                    </div>
+                                                </div>
+                                                <div className="font-mono text-xs rounded-xl overflow-hidden border border-slate-200">
+                                                    {diff.map((d, idx) => (
+                                                        <div
+                                                            key={idx}
+                                                            className={cn(
+                                                                "px-3 py-0.5 leading-relaxed whitespace-pre-wrap break-words",
+                                                                d.type === 'added' ? "bg-emerald-50 text-emerald-800 border-l-2 border-emerald-400" :
+                                                                d.type === 'removed' ? "bg-red-50 text-red-700 border-l-2 border-red-400 line-through opacity-70" :
+                                                                "text-slate-600"
+                                                            )}
+                                                        >
+                                                            <span className="mr-2 opacity-40 select-none">
+                                                                {d.type === 'added' ? '+' : d.type === 'removed' ? '-' : '\u00A0'}
+                                                            </span>
+                                                            {d.line || '\u00A0'}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                                <button
+                                                    onClick={() => {
+                                                        if (window.confirm(`v${diffTarget + 1}「${h.label}」の内容に戻しますか？`)) {
+                                                            setGeneratedPlan(h.plan);
+                                                            setShowHistoryModal(false);
+                                                            setDiffTarget(null);
+                                                        }
+                                                    }}
+                                                    className="flex items-center gap-2 px-4 py-2 bg-violet-100 text-violet-700 hover:bg-violet-200 rounded-lg text-sm font-bold transition-colors"
+                                                >
+                                                    <RotateCcw className="w-4 h-4" /> このバージョンに戻す
+                                                </button>
+                                            </div>
+                                        );
+                                    })() : (
+                                        <div className="h-full flex flex-col items-center justify-center text-slate-300 space-y-3">
+                                            <History className="w-12 h-12 opacity-20" />
+                                            <p className="text-center text-sm">左のバージョンを選択すると<br />差分が表示されます</p>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
 
             {/* ===== 先生パーソナライズ 入力モーダル ===== */}
             <AnimatePresence>

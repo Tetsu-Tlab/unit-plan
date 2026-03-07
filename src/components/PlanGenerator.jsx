@@ -122,6 +122,9 @@ const PlanGenerator = () => {
     const [isChatLoading, setIsChatLoading] = useState(false);
     const chatEndRef = useRef(null);
 
+    // レイアウトモード: 'design'（入力） | 'refine'（精錬）
+    const [layoutMode, setLayoutMode] = useState('design');
+
     // teacherProfile の1フィールドを更新
     const updateTeacherProfile = (key, value) => {
         setTeacherProfile(prev => ({ ...prev, [key]: value }));
@@ -471,6 +474,8 @@ Markdown形式で出力してください。
 
             const text = data.candidates[0].content.parts[0].text;
             setGeneratedPlan(text);
+            setLayoutMode('refine');   // 生成完了 → 精錬モードへ
+            setIsChatOpen(true);       // チャットを自動展開
 
         } catch (error) {
             console.error(error);
@@ -604,10 +609,63 @@ Markdown形式で出力してください。
                 </div>
             </header>
 
+            {/* ステップインジケーター */}
+            <div className="border-b border-slate-100 bg-white/80 backdrop-blur-sm">
+                <div className="max-w-7xl mx-auto px-6 py-2 flex items-center gap-1 overflow-x-auto">
+                    {[
+                        { step: 1, label: '基本設定', mode: 'design' },
+                        { step: 2, label: '研究構想図', mode: 'design' },
+                        { step: 3, label: 'こだわり入力', mode: 'design' },
+                        { step: 4, label: '教材・指導要領', mode: 'design' },
+                        { step: 5, label: '生成', mode: 'design' },
+                        { step: 6, label: 'AI精錬', mode: 'refine' },
+                    ].map((s, i, arr) => {
+                        const isRefineStep = s.mode === 'refine';
+                        const isActive = layoutMode === 'refine' ? isRefineStep : (s.step <= 5);
+                        const isCurrent = layoutMode === 'refine' ? isRefineStep : s.step === 5;
+                        return (
+                            <React.Fragment key={s.step}>
+                                <button
+                                    onClick={() => { if (s.mode === 'design') setLayoutMode('design'); else if (generatedPlan) setLayoutMode('refine'); }}
+                                    className={cn(
+                                        "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-all",
+                                        isCurrent
+                                            ? "bg-indigo-600 text-white shadow-sm"
+                                            : isActive && !isRefineStep
+                                            ? "bg-indigo-50 text-indigo-600"
+                                            : isRefineStep && generatedPlan
+                                            ? "bg-emerald-50 text-emerald-600 hover:bg-emerald-100"
+                                            : "text-slate-400 cursor-default"
+                                    )}
+                                >
+                                    <span className={cn(
+                                        "w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-black shrink-0",
+                                        isCurrent ? "bg-white text-indigo-600" : "bg-current/20"
+                                    )}>{s.step}</span>
+                                    {s.label}
+                                </button>
+                                {i < arr.length - 1 && <ChevronRight className="w-3 h-3 text-slate-300 shrink-0" />}
+                            </React.Fragment>
+                        );
+                    })}
+                    {generatedPlan && (
+                        <button
+                            onClick={() => { setLayoutMode('design'); }}
+                            className="ml-auto text-xs text-slate-400 hover:text-slate-600 flex items-center gap-1 whitespace-nowrap px-2"
+                        >
+                            ← 設計に戻る
+                        </button>
+                    )}
+                </div>
+            </div>
+
             <main className="max-w-7xl mx-auto px-6 py-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
 
-                {/* Left Column: Inputs */}
-                <div className="lg:col-span-5 space-y-6">
+                {/* Left Column: Inputs（精錬モード時は非表示） */}
+                <div className={cn(
+                    "space-y-6 transition-all duration-500",
+                    layoutMode === 'refine' ? "hidden" : "lg:col-span-5"
+                )}>
 
                     {/* Settings Card */}
                     <AnimatePresence>
@@ -933,8 +991,11 @@ Markdown形式で出力してください。
 
                 </div>
 
-                {/* Right Column: Output */}
-                <div className="lg:col-span-7 flex flex-col gap-4 sticky top-24 h-[calc(100vh-8rem)] min-h-0">
+                {/* Right Column: Output（精錬モード時は全幅） */}
+                <div className={cn(
+                    "flex flex-col gap-4 sticky top-24 min-h-0 transition-all duration-500",
+                    layoutMode === 'refine' ? "lg:col-span-12 h-[calc(100vh-9rem)]" : "lg:col-span-7 h-[calc(100vh-8rem)]"
+                )}>
 
                     {/* Action Bar (Final: Optimized for Organization) */}
                     <div className="bg-white rounded-xl shadow-sm border border-indigo-100 p-5 flex flex-col gap-4 shrink-0">

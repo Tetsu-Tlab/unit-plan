@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApiKeyBridge } from '../hooks/useApiKeyBridge';
-import { BookOpen, Settings, School, GraduationCap, FileText, Upload, Sparkles, AlertCircle, Save, Heart, X, File as FileIcon } from 'lucide-react';
+import { BookOpen, Settings, School, GraduationCap, FileText, Upload, Sparkles, AlertCircle, Save, Heart, X, File as FileIcon, Mic, MicOff, ChevronRight, CheckCircle2, User } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '../lib/utils';
 import mammoth from 'mammoth';
@@ -8,6 +8,52 @@ import { exportToWord } from '../lib/docxExport';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { saveAs } from 'file-saver';
+
+// 先生パーソナライズ質問項目
+const TEACHER_QUESTIONS = [
+    {
+        key: 'philosophy',
+        label: '授業観・学習観',
+        question: 'あなたが大切にしている授業観・学習観を教えてください',
+        placeholder: '例：子どもが主体的に問いを立て、仲間と協働して解決していく授業を大切にしています。',
+        icon: '🌱'
+    },
+    {
+        key: 'goalChild',
+        label: 'めざす子ども像',
+        question: 'この単元を通してどんな子どもに育てたいですか？',
+        placeholder: '例：自分の考えを根拠をもって伝え、友達の意見から学べる子ども。',
+        icon: '🌟'
+    },
+    {
+        key: 'classReality',
+        label: 'クラスの実態',
+        question: '今のクラスの様子（強み・課題・気になること）を教えてください',
+        placeholder: '例：積極的に発言する子が多い一方、書くことへの抵抗感が強い子が数名います。',
+        icon: '👥'
+    },
+    {
+        key: 'approach',
+        label: '重視する指導の手立て',
+        question: 'よく使う授業スタイル・工夫・手法はありますか？',
+        placeholder: '例：ICTを活用した協働学習、Think-Pair-Share法を多用しています。',
+        icon: '🛠️'
+    },
+    {
+        key: 'evaluation',
+        label: '評価へのこだわり',
+        question: '評価で特に大切にしていることを教えてください',
+        placeholder: '例：ペーパーテストより、振り返り日記やポートフォリオで成長を見取りたい。',
+        icon: '📊'
+    },
+    {
+        key: 'freeNote',
+        label: 'その他・AIへ一言',
+        question: 'AIに特に伝えたいこと、補足があれば自由に書いてください',
+        placeholder: '例：ICT活用を強調してほしい／子どもが「書く」活動を中心にした展開にしてほしい など',
+        icon: '💬'
+    },
+];
 
 const PlanGenerator = () => {
     const { apiKey, saveApiKey } = useApiKeyBridge();
@@ -31,7 +77,14 @@ const PlanGenerator = () => {
     const [classType, setClassType] = useState('regular');
     const [unitName, setUnitName] = useState('');
 
-    const [teacherFocus, setTeacherFocus] = useState('');
+    // 先生パーソナライズ
+    const [teacherProfile, setTeacherProfile] = useState(() => {
+        const saved = localStorage.getItem('unitplan_teacher_profile');
+        return saved ? JSON.parse(saved) : {};
+    });
+    const [showTeacherModal, setShowTeacherModal] = useState(false);
+    const [listeningKey, setListeningKey] = useState(null); // 録音中のフィールドキー
+    const recognitionRef = useRef(null);
 
     // 研究構想図・研究資料
     const [researchFiles, setResearchFiles] = useState([]);       // PDF: { name, mimeType, data (base64) }
@@ -47,6 +100,82 @@ const PlanGenerator = () => {
     // Generation State
     const [generatedPlan, setGeneratedPlan] = useState('');
     const [isLoading, setIsLoading] = useState(false);
+
+    // teacherProfile の1フィールドを更新
+    const updateTeacherProfile = (key, value) => {
+        setTeacherProfile(prev => ({ ...prev, [key]: value }));
+    };
+
+    // teacherProfile を localStorage に保存してモーダルを閉じる
+    const applyTeacherProfile = () => {
+        localStorage.setItem('unitplan_teacher_profile', JSON.stringify(teacherProfile));
+        stopVoice();
+        setShowTeacherModal(false);
+    };
+
+    // 音声入力の開始・停止
+    const toggleVoice = (key) => {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRecognition) {
+            alert('このブラウザは音声入力に対応していません。Chrome または Edge をお使いください。');
+            return;
+        }
+
+        // 同じキーをもう一度押したら停止
+        if (listeningKey === key) {
+            stopVoice();
+            return;
+        }
+
+        // 別のフィールドが録音中なら停止してから開始
+        stopVoice();
+
+        const recognition = new SpeechRecognition();
+        recognition.lang = 'ja-JP';
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognitionRef.current = recognition;
+        setListeningKey(key);
+
+        let finalText = teacherProfile[key] || '';
+
+        recognition.onresult = (event) => {
+            let interim = '';
+            for (let i = event.resultIndex; i < event.results.length; i++) {
+                const transcript = event.results[i][0].transcript;
+                if (event.results[i].isFinal) {
+                    finalText += transcript;
+                    updateTeacherProfile(key, finalText);
+                } else {
+                    interim = transcript;
+                    updateTeacherProfile(key, finalText + interim);
+                }
+            }
+        };
+
+        recognition.onend = () => {
+            setListeningKey(null);
+            recognitionRef.current = null;
+        };
+
+        recognition.onerror = () => {
+            setListeningKey(null);
+            recognitionRef.current = null;
+        };
+
+        recognition.start();
+    };
+
+    const stopVoice = () => {
+        if (recognitionRef.current) {
+            recognitionRef.current.stop();
+            recognitionRef.current = null;
+        }
+        setListeningKey(null);
+    };
+
+    // 入力済み項目数
+    const filledCount = TEACHER_QUESTIONS.filter(q => teacherProfile[q.key]?.trim()).length;
 
     const toggleAi = () => {
         const next = !aiEnabled;
@@ -213,9 +342,12 @@ ${researchTextContent ? `\n【研究資料テキスト】\n${researchTextContent
     : '（研究構想図は添付されていません。一般的な授業改善の視点で作成してください。）'
 }
 
-## 先生からのリクエスト・重視する点
-「${teacherFocus || '特になし'}」
-※この点も単元の目標・評価・授業展開に反映させてください。
+## 先生のパーソナライズ情報（最大限反映すること）
+${TEACHER_QUESTIONS.map(q => {
+    const val = teacherProfile[q.key]?.trim();
+    return val ? `【${q.label}】\n${val}` : null;
+}).filter(Boolean).join('\n\n') || '（入力なし）'}
+※上記の先生の考え・こだわりを単元の目標・展開・評価・支援の全てに色濃く反映してください。
 
 ## 単元基本情報
 - 校種: ${schoolType === 'elementary' ? '小学校' : '中学校'}
@@ -536,21 +668,38 @@ Markdown形式で出力してください。
                             )}
                         </div>
 
-                        {/* 先生のこだわり */}
-                        <div className="bg-gradient-to-br from-pink-500 to-rose-600 rounded-xl shadow-float text-white p-6 relative overflow-hidden group">
+                        {/* 先生のこだわり・パーソナライズ */}
+                        <button
+                            onClick={() => setShowTeacherModal(true)}
+                            className="bg-gradient-to-br from-pink-500 to-rose-600 rounded-xl shadow-float text-white p-6 relative overflow-hidden group text-left w-full transition-all hover:shadow-xl hover:scale-[1.01]"
+                        >
                             <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
                                 <Heart className="w-24 h-24" />
                             </div>
-                            <h2 className="text-lg font-bold mb-1 flex items-center gap-2 relative z-10 text-white">
-                                <Heart className="w-5 h-5" /> 先生のこだわり・重点
+                            <h2 className="text-lg font-bold mb-1 flex items-center gap-2 relative z-10">
+                                <Heart className="w-5 h-5" /> 先生のこだわり・パーソナライズ
                             </h2>
-                            <textarea
-                                value={teacherFocus}
-                                onChange={(e) => setTeacherFocus(e.target.value)}
-                                placeholder="この単元で特に大切にしたいこと、育てたい力、クラスの実態など..."
-                                className="w-full mt-2 px-3 py-2 bg-white/10 border border-white/20 rounded-lg text-white placeholder-pink-200 focus:ring-2 focus:ring-white/50 focus:outline-none transition-all resize-none h-20 relative z-10 text-sm"
-                            />
-                        </div>
+                            <p className="text-sm text-pink-100 relative z-10 mb-3">
+                                授業観・めざす子ども像・クラスの実態などを入力してAIに伝えます
+                            </p>
+                            <div className="relative z-10 flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                    {filledCount > 0 ? (
+                                        <>
+                                            <CheckCircle2 className="w-4 h-4 text-pink-200" />
+                                            <span className="text-sm font-bold text-pink-100">
+                                                {filledCount} / {TEACHER_QUESTIONS.length} 項目 入力済み
+                                            </span>
+                                        </>
+                                    ) : (
+                                        <span className="text-sm text-pink-200">未入力（クリックして入力）</span>
+                                    )}
+                                </div>
+                                <div className="flex items-center gap-1 text-sm font-bold bg-white/20 px-3 py-1.5 rounded-lg">
+                                    <User className="w-4 h-4" /> 入力・編集する <ChevronRight className="w-4 h-4" />
+                                </div>
+                            </div>
+                        </button>
                     </div>
 
                     {/* Unit Context */}
@@ -814,6 +963,112 @@ Markdown形式で出力してください。
                 </div>
 
             </main>
+
+            {/* ===== 先生パーソナライズ 入力モーダル ===== */}
+            <AnimatePresence>
+                {showTeacherModal && (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 backdrop-blur-sm p-4"
+                        onClick={(e) => { if (e.target === e.currentTarget) applyTeacherProfile(); }}
+                    >
+                        <motion.div
+                            initial={{ scale: 0.95, y: 30, opacity: 0 }}
+                            animate={{ scale: 1, y: 0, opacity: 1 }}
+                            exit={{ scale: 0.95, y: 30, opacity: 0 }}
+                            transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+                            className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden"
+                        >
+                            {/* モーダルヘッダー */}
+                            <div className="bg-gradient-to-r from-pink-500 to-rose-600 px-6 py-5 flex items-center justify-between shrink-0">
+                                <div>
+                                    <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                                        <Heart className="w-5 h-5" /> 先生のこだわり・パーソナライズ
+                                    </h2>
+                                    <p className="text-pink-100 text-sm mt-0.5">
+                                        入力した内容はAIが単元計画に最大限反映します。音声入力対応 🎤
+                                    </p>
+                                </div>
+                                <button onClick={applyTeacherProfile} className="p-2 hover:bg-white/20 rounded-full transition-colors">
+                                    <X className="w-5 h-5 text-white" />
+                                </button>
+                            </div>
+
+                            {/* 質問リスト（スクロール） */}
+                            <div className="overflow-y-auto flex-1 p-5 space-y-5">
+                                {TEACHER_QUESTIONS.map((q) => {
+                                    const isListening = listeningKey === q.key;
+                                    return (
+                                        <div key={q.key} className="bg-slate-50 rounded-xl border border-slate-200 p-4 space-y-2">
+                                            {/* 質問文 */}
+                                            <div className="flex items-start justify-between gap-3">
+                                                <label className="text-sm font-bold text-slate-700 flex items-center gap-1.5 leading-snug">
+                                                    <span className="text-base">{q.icon}</span>
+                                                    {q.question}
+                                                </label>
+                                                {/* 音声入力ボタン */}
+                                                <button
+                                                    onClick={() => toggleVoice(q.key)}
+                                                    title={isListening ? '録音を停止' : '音声入力を開始'}
+                                                    className={cn(
+                                                        "shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all border",
+                                                        isListening
+                                                            ? "bg-red-500 text-white border-red-500 animate-pulse"
+                                                            : "bg-white text-slate-500 border-slate-200 hover:border-pink-400 hover:text-pink-600"
+                                                    )}
+                                                >
+                                                    {isListening
+                                                        ? <><MicOff className="w-3.5 h-3.5" /> 停止</>
+                                                        : <><Mic className="w-3.5 h-3.5" /> 音声入力</>
+                                                    }
+                                                </button>
+                                            </div>
+
+                                            {/* テキストエリア */}
+                                            <div className="relative">
+                                                <textarea
+                                                    value={teacherProfile[q.key] || ''}
+                                                    onChange={(e) => updateTeacherProfile(q.key, e.target.value)}
+                                                    placeholder={q.placeholder}
+                                                    rows={3}
+                                                    className={cn(
+                                                        "w-full px-3 py-2.5 rounded-lg border text-sm resize-none focus:outline-none focus:ring-2 transition-all",
+                                                        isListening
+                                                            ? "border-red-300 ring-2 ring-red-200 bg-red-50"
+                                                            : "border-slate-200 focus:ring-pink-300 bg-white"
+                                                    )}
+                                                />
+                                                {isListening && (
+                                                    <div className="absolute bottom-2 right-2 flex items-center gap-1 text-red-500 text-xs font-bold">
+                                                        <span className="w-2 h-2 rounded-full bg-red-500 animate-ping inline-block" />
+                                                        録音中
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+
+                            {/* フッター */}
+                            <div className="shrink-0 px-5 py-4 border-t border-slate-100 bg-slate-50 flex items-center justify-between gap-3">
+                                <p className="text-xs text-slate-500">
+                                    入力内容はブラウザに自動保存されます
+                                </p>
+                                <button
+                                    onClick={applyTeacherProfile}
+                                    className="flex items-center gap-2 bg-gradient-to-r from-pink-500 to-rose-600 text-white px-6 py-2.5 rounded-xl font-bold text-sm shadow-md hover:shadow-lg transition-all transform active:scale-95"
+                                >
+                                    <CheckCircle2 className="w-4 h-4" />
+                                    反映して閉じる
+                                </button>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
         </div>
     );
 };

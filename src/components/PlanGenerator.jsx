@@ -1,6 +1,49 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApiKeyBridge } from '../hooks/useApiKeyBridge';
-import { BookOpen, Settings, School, GraduationCap, FileText, Upload, Sparkles, AlertCircle, Save, Heart, X, File as FileIcon, Mic, MicOff, ChevronRight, CheckCircle2, User, MessageCircle, Send, ChevronDown, ChevronUp, RotateCcw, Zap, History } from 'lucide-react';
+import { BookOpen, Settings, School, GraduationCap, FileText, Upload, Sparkles, AlertCircle, Save, Heart, X, File as FileIcon, Mic, MicOff, ChevronRight, CheckCircle2, User, MessageCircle, Send, ChevronDown, ChevronUp, RotateCcw, Zap, History, FolderOpen, FolderX } from 'lucide-react';
+
+// ───────────────────────────────────────────
+// IndexedDB helpers for FileSystemDirectoryHandle persistence
+// ───────────────────────────────────────────
+const IDB_NAME = 'unitplan_db';
+const IDB_STORE = 'handles';
+function openIDB() {
+    return new Promise((resolve, reject) => {
+        const req = indexedDB.open(IDB_NAME, 1);
+        req.onupgradeneeded = () => req.result.createObjectStore(IDB_STORE);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+    });
+}
+async function saveHandleIDB(handle) {
+    const db = await openIDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction(IDB_STORE, 'readwrite');
+        tx.objectStore(IDB_STORE).put(handle, 'saveFolder');
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+    });
+}
+async function loadHandleIDB() {
+    try {
+        const db = await openIDB();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(IDB_STORE, 'readonly');
+            const req = tx.objectStore(IDB_STORE).get('saveFolder');
+            req.onsuccess = () => resolve(req.result || null);
+            req.onerror = () => reject(req.error);
+        });
+    } catch { return null; }
+}
+async function clearHandleIDB() {
+    const db = await openIDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction(IDB_STORE, 'readwrite');
+        tx.objectStore(IDB_STORE).delete('saveFolder');
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+    });
+}
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '../lib/utils';
 import mammoth from 'mammoth';
@@ -174,6 +217,10 @@ const PlanGenerator = () => {
     const [showHistoryModal, setShowHistoryModal] = useState(false);
     const [diffTarget, setDiffTarget] = useState(null); // 差分表示するhistory index
 
+    // 保存先フォルダ
+    const [folderHandle, setFolderHandle] = useState(null);
+    const [folderName, setFolderName] = useState(() => localStorage.getItem('unitplan_folder_name') || '');
+
     // teacherProfile の1フィールドを更新
     const updateTeacherProfile = (key, value) => {
         setTeacherProfile(prev => ({ ...prev, [key]: value }));
@@ -316,6 +363,38 @@ ${generatedPlan}
     useEffect(() => {
         if (apiKey) setShowSettings(false);
     }, [apiKey]);
+
+    // 起動時に IndexedDB からフォルダハンドルを復元
+    useEffect(() => {
+        loadHandleIDB().then(handle => {
+            if (handle) setFolderHandle(handle);
+        });
+    }, []);
+
+    // 保存先フォルダを選択
+    const handlePickFolder = async () => {
+        if (!window.showDirectoryPicker) {
+            alert('このブラウザはフォルダ指定保存に対応していません。Chrome または Edge をお使いください。');
+            return;
+        }
+        try {
+            const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+            setFolderHandle(handle);
+            setFolderName(handle.name);
+            localStorage.setItem('unitplan_folder_name', handle.name);
+            await saveHandleIDB(handle);
+        } catch (e) {
+            if (e.name !== 'AbortError') console.error(e);
+        }
+    };
+
+    // 保存先フォルダを解除
+    const handleClearFolder = async () => {
+        setFolderHandle(null);
+        setFolderName('');
+        localStorage.removeItem('unitplan_folder_name');
+        await clearHandleIDB();
+    };
 
     // 研究構想図ファイルのアップロード処理
     const handleResearchFileUpload = async (e) => {
@@ -545,18 +624,35 @@ Markdown形式で出力してください。
     const handleWordExport = async () => {
         if (!generatedPlan) return;
         const fileName = `${grade || ''}${subject || ''}_${unitName || '単元計画'}`;
-        await exportToWord(fileName, generatedPlan, {
+        const result = await exportToWord(fileName, generatedPlan, {
             schoolType, grade, subject, unitName,
             researchTheme: researchTextContent.slice(0, 200) || '（研究構想図添付）',
             teacherFocus: Object.values(teacherProfile).filter(Boolean).join(' / ').slice(0, 200)
-        });
+        }, folderHandle);
+        if (result?.saved && result.folder) {
+            alert(`「${result.folder}」に保存しました ✅`);
+        }
     };
 
-    const handleTextExport = () => {
+    const handleTextExport = async () => {
         if (!generatedPlan) return;
-        const fileName = `${grade || ''}${subject || ''}_${unitName || '単元計画'}.txt`;
-        const blob = new Blob([generatedPlan], { type: "text/plain;charset=utf-8" });
-        saveAs(blob, fileName);
+        const baseName = `${grade || ''}${subject || ''}_${unitName || '単元計画'}`;
+        const blob = new Blob([generatedPlan], { type: 'text/plain;charset=utf-8' });
+
+        if (folderHandle) {
+            try {
+                const perm = await folderHandle.requestPermission({ mode: 'readwrite' });
+                if (perm === 'granted') {
+                    const fh = await folderHandle.getFileHandle(`${baseName}.txt`, { create: true });
+                    const writable = await fh.createWritable();
+                    await writable.write(blob);
+                    await writable.close();
+                    alert(`「${folderHandle.name}」に保存しました ✅`);
+                    return;
+                }
+            } catch (err) { console.error(err); }
+        }
+        saveAs(blob, `${baseName}.txt`);
     };
 
     const handleHandover = () => {
@@ -1067,6 +1163,43 @@ Markdown形式で出力してください。
                                 <p className="text-xs text-slate-500 mt-0.5">計画を保存して、次のステップへ</p>
                             </div>
                         </div>
+
+                        {/* 保存先フォルダ */}
+                        <div className={cn(
+                            "flex items-center gap-2 px-3 py-2 rounded-lg border text-xs",
+                            folderHandle
+                                ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+                                : "bg-slate-50 border-slate-200 text-slate-500"
+                        )}>
+                            <FolderOpen className="w-4 h-4 shrink-0" />
+                            <span className="flex-1 truncate font-medium">
+                                {folderHandle
+                                    ? <><span className="opacity-60 font-normal">保存先：</span>{folderName}</>
+                                    : <span className="opacity-70">保存先フォルダ未設定（毎回ダイアログ）</span>
+                                }
+                            </span>
+                            <button
+                                onClick={handlePickFolder}
+                                className={cn(
+                                    "shrink-0 px-2 py-1 rounded font-bold transition-colors",
+                                    folderHandle
+                                        ? "bg-emerald-100 hover:bg-emerald-200 text-emerald-700"
+                                        : "bg-indigo-100 hover:bg-indigo-200 text-indigo-700"
+                                )}
+                            >
+                                {folderHandle ? '変更' : 'フォルダを選択'}
+                            </button>
+                            {folderHandle && (
+                                <button onClick={handleClearFolder} title="解除" className="shrink-0 text-slate-400 hover:text-red-500 transition-colors">
+                                    <FolderX className="w-4 h-4" />
+                                </button>
+                            )}
+                        </div>
+                        {folderName && !folderHandle && (
+                            <p className="text-[10px] text-amber-600 -mt-2">
+                                前回の保存先「{folderName}」— <button onClick={handlePickFolder} className="underline hover:text-amber-800">再度許可する</button>
+                            </p>
+                        )}
 
                         {/* Actions */}
                         <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">

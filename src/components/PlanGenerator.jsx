@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApiKeyBridge } from '../hooks/useApiKeyBridge';
-import { BookOpen, Settings, School, GraduationCap, FileText, Upload, Sparkles, AlertCircle, Save, Heart, X, File as FileIcon, Mic, MicOff, ChevronRight, CheckCircle2, User } from 'lucide-react';
+import { BookOpen, Settings, School, GraduationCap, FileText, Upload, Sparkles, AlertCircle, Save, Heart, X, File as FileIcon, Mic, MicOff, ChevronRight, CheckCircle2, User, MessageCircle, Send, ChevronDown, ChevronUp, RotateCcw, Zap } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '../lib/utils';
 import mammoth from 'mammoth';
@@ -55,6 +55,20 @@ const TEACHER_QUESTIONS = [
     },
 ];
 
+// AI修正クイックチップ
+const QUICK_CHIPS = [
+    { label: '📝 板書計画を追加', instruction: '各授業時の板書計画（まとめ・キーワード）を追加してください。' },
+    { label: '👥 グループ活動を強化', instruction: 'グループ活動・協働学習の場面をより多く・具体的にしてください。' },
+    { label: '💻 ICT活用を追加', instruction: 'ICTを活用する場面を具体的に追加してください。' },
+    { label: '📊 評価規準を詳しく', instruction: '評価規準をより詳細に、具体的な評価方法も含めて書き直してください。' },
+    { label: '🤝 特支の手立てを強化', instruction: '特別な支援が必要な子どもへの手立て・配慮を具体的に充実させてください。' },
+    { label: '➕ 授業時数を1時間追加', instruction: '授業時数を1時間追加して、その内容も適切に設計してください。' },
+    { label: '🔗 研究テーマとの整合性確認', instruction: '研究テーマとの整合性を確認し、より明確につながりが見える計画に修正してください。' },
+    { label: '✍️ 単元設定の理由を充実', instruction: '単元設定の理由をより豊かに、子どもの実態や教材の意義を含めて書き直してください。' },
+    { label: '🗣️ 問い・言語活動を強化', instruction: '子どもが主体的に問いを立て、言語活動が充実するよう計画を修正してください。' },
+    { label: '⏱️ 授業時数を1時間削減', instruction: '授業時数を1時間削減し、学習の流れが自然になるよう調整してください。' },
+];
+
 const PlanGenerator = () => {
     const { apiKey, saveApiKey } = useApiKeyBridge();
     const setApiKey = saveApiKey; // 既存コードとの互換性を保つ
@@ -100,6 +114,13 @@ const PlanGenerator = () => {
     // Generation State
     const [generatedPlan, setGeneratedPlan] = useState('');
     const [isLoading, setIsLoading] = useState(false);
+
+    // AI修正チャット
+    const [chatMessages, setChatMessages] = useState([]);
+    const [chatInput, setChatInput] = useState('');
+    const [isChatOpen, setIsChatOpen] = useState(false);
+    const [isChatLoading, setIsChatLoading] = useState(false);
+    const chatEndRef = useRef(null);
 
     // teacherProfile の1フィールドを更新
     const updateTeacherProfile = (key, value) => {
@@ -176,6 +197,57 @@ const PlanGenerator = () => {
 
     // 入力済み項目数
     const filledCount = TEACHER_QUESTIONS.filter(q => teacherProfile[q.key]?.trim()).length;
+
+    // チャット送信でAI修正
+    const handleChatSend = async (instruction) => {
+        const text = (instruction || chatInput).trim();
+        if (!text || !generatedPlan) return;
+        if (!aiEnabled || !apiKey) {
+            alert('AIがOFFまたはAPIキー未設定です。');
+            return;
+        }
+
+        const userMsg = { role: 'user', content: text };
+        setChatMessages(prev => [...prev, userMsg]);
+        setChatInput('');
+        setIsChatLoading(true);
+        setIsChatOpen(true);
+
+        // スクロール
+        setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+
+        try {
+            const prompt = `以下は現在作成中の単元指導計画です：
+
+${generatedPlan}
+
+---
+ユーザーからの修正依頼：「${text}」
+
+上記の修正依頼に従い、単元指導計画を修正してください。
+修正後の完全な計画のみをMarkdown形式で出力してください。説明文・前置きは一切不要です。`;
+
+            const res = await fetch(
+                `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+                }
+            );
+            const data = await res.json();
+            if (data.error) throw new Error(data.error.message);
+
+            const revised = data.candidates[0].content.parts[0].text;
+            setGeneratedPlan(revised);
+            setChatMessages(prev => [...prev, { role: 'ai', content: '計画を更新しました ✅' }]);
+        } catch (err) {
+            setChatMessages(prev => [...prev, { role: 'ai', content: `エラー: ${err.message}` }]);
+        } finally {
+            setIsChatLoading(false);
+            setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+        }
+    };
 
     const toggleAi = () => {
         const next = !aiEnabled;
@@ -862,7 +934,7 @@ Markdown形式で出力してください。
                 </div>
 
                 {/* Right Column: Output */}
-                <div className="lg:col-span-7 flex flex-col gap-4 sticky top-24 h-[calc(100vh-8rem)]">
+                <div className="lg:col-span-7 flex flex-col gap-4 sticky top-24 h-[calc(100vh-8rem)] min-h-0">
 
                     {/* Action Bar (Final: Optimized for Organization) */}
                     <div className="bg-white rounded-xl shadow-sm border border-indigo-100 p-5 flex flex-col gap-4 shrink-0">
@@ -930,19 +1002,22 @@ Markdown形式で出力してください。
                     </div>
 
                     {/* Preview Area */}
-                    <div className="bg-white rounded-xl shadow-premium border border-slate-100 flex-grow flex flex-col overflow-hidden">
-                        <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+                    <div className="bg-white rounded-xl shadow-premium border border-slate-100 flex-grow min-h-0 flex flex-col overflow-hidden">
+                        <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50 shrink-0">
                             <h3 className="font-bold text-slate-700">生成プレビュー</h3>
                             {generatedPlan && (
-                                <button
-                                    onClick={() => navigator.clipboard.writeText(generatedPlan)}
-                                    className="text-xs flex items-center gap-1 text-slate-400 hover:text-indigo-600 font-medium px-2 py-1 rounded transition-colors"
-                                >
-                                    <Save className="w-3 h-3" /> Markdownコピー
-                                </button>
+                                <div className="flex items-center gap-2">
+                                    <span className="text-xs text-slate-400">修正回数: {chatMessages.filter(m => m.role === 'user').length}</span>
+                                    <button
+                                        onClick={() => navigator.clipboard.writeText(generatedPlan)}
+                                        className="text-xs flex items-center gap-1 text-slate-400 hover:text-indigo-600 font-medium px-2 py-1 rounded transition-colors"
+                                    >
+                                        <Save className="w-3 h-3" /> Markdownコピー
+                                    </button>
+                                </div>
                             )}
                         </div>
-                        <div className="p-8 flex-grow overflow-y-auto">
+                        <div className="p-8 flex-grow overflow-y-auto min-h-0">
                             {generatedPlan ? (
                                 <div ref={previewRef} className="prose prose-slate max-w-none prose-headings:font-bold prose-h1:text-2xl prose-h2:text-xl prose-h3:text-lg prose-p:text-sm prose-li:text-sm prose-table:text-sm prose-th:bg-slate-100 prose-td:border-slate-200">
                                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
@@ -959,6 +1034,126 @@ Markdown形式で出力してください。
                                 </div>
                             )}
                         </div>
+                    </div>
+
+                    {/* ===== AI修正チャットパネル ===== */}
+                    <div className={cn(
+                        "bg-white rounded-xl border shadow-lg flex flex-col overflow-hidden transition-all duration-300 shrink-0",
+                        isChatOpen ? "border-indigo-200 max-h-[42vh]" : "border-slate-200 max-h-[52px]"
+                    )}>
+                        {/* チャットパネルヘッダー（常に表示） */}
+                        <button
+                            onClick={() => setIsChatOpen(o => !o)}
+                            disabled={!generatedPlan}
+                            className={cn(
+                                "flex items-center justify-between px-4 py-3 w-full text-left transition-colors shrink-0",
+                                generatedPlan
+                                    ? isChatOpen ? "bg-indigo-600 text-white" : "bg-indigo-50 hover:bg-indigo-100 text-indigo-700"
+                                    : "bg-slate-50 text-slate-400 cursor-not-allowed"
+                            )}
+                        >
+                            <div className="flex items-center gap-2 font-bold text-sm">
+                                <MessageCircle className="w-4 h-4" />
+                                AI修正チャット
+                                {chatMessages.filter(m => m.role === 'user').length > 0 && (
+                                    <span className={cn(
+                                        "text-xs px-2 py-0.5 rounded-full font-bold",
+                                        isChatOpen ? "bg-white/20 text-white" : "bg-indigo-100 text-indigo-600"
+                                    )}>
+                                        {chatMessages.filter(m => m.role === 'user').length}回修正済み
+                                    </span>
+                                )}
+                                {!generatedPlan && <span className="text-xs font-normal opacity-60">（計画を生成後に使用できます）</span>}
+                            </div>
+                            {isChatOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+                        </button>
+
+                        {/* チャット本体（展開時） */}
+                        {isChatOpen && (
+                            <div className="flex flex-col flex-1 min-h-0">
+                                {/* クイックチップ */}
+                                <div className="px-3 pt-3 pb-2 border-b border-slate-100 shrink-0">
+                                    <p className="text-[10px] font-bold text-slate-400 uppercase mb-2 flex items-center gap-1">
+                                        <Zap className="w-3 h-3" /> ワンタップ修正
+                                    </p>
+                                    <div className="flex gap-1.5 flex-wrap">
+                                        {QUICK_CHIPS.map((chip) => (
+                                            <button
+                                                key={chip.label}
+                                                onClick={() => handleChatSend(chip.instruction)}
+                                                disabled={isChatLoading}
+                                                className="text-xs px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg font-medium transition-colors border border-indigo-100 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                                            >
+                                                {chip.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {/* メッセージ履歴 */}
+                                <div className="flex-1 overflow-y-auto min-h-0 px-4 py-3 space-y-2">
+                                    {chatMessages.length === 0 ? (
+                                        <p className="text-xs text-slate-400 text-center py-4">
+                                            上のチップを押すか、下のテキストボックスに自由に指示を入力してください
+                                        </p>
+                                    ) : (
+                                        chatMessages.map((msg, i) => (
+                                            <div key={i} className={cn(
+                                                "flex",
+                                                msg.role === 'user' ? "justify-end" : "justify-start"
+                                            )}>
+                                                <div className={cn(
+                                                    "max-w-[85%] px-3 py-2 rounded-xl text-sm",
+                                                    msg.role === 'user'
+                                                        ? "bg-indigo-600 text-white rounded-br-sm"
+                                                        : "bg-slate-100 text-slate-700 rounded-bl-sm"
+                                                )}>
+                                                    {msg.content}
+                                                </div>
+                                            </div>
+                                        ))
+                                    )}
+                                    {isChatLoading && (
+                                        <div className="flex justify-start">
+                                            <div className="bg-slate-100 px-4 py-2 rounded-xl rounded-bl-sm flex items-center gap-2 text-sm text-slate-500">
+                                                <div className="w-3 h-3 border-2 border-slate-300 border-t-indigo-500 rounded-full animate-spin" />
+                                                AIが修正中...
+                                            </div>
+                                        </div>
+                                    )}
+                                    <div ref={chatEndRef} />
+                                </div>
+
+                                {/* 入力エリア */}
+                                <div className="p-3 border-t border-slate-100 shrink-0 flex gap-2 bg-slate-50">
+                                    <input
+                                        type="text"
+                                        value={chatInput}
+                                        onChange={e => setChatInput(e.target.value)}
+                                        onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleChatSend(); } }}
+                                        placeholder="例：3時目をグループ活動中心に書き直して..."
+                                        disabled={isChatLoading}
+                                        className="flex-1 px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white disabled:opacity-50"
+                                    />
+                                    <button
+                                        onClick={() => handleChatSend()}
+                                        disabled={!chatInput.trim() || isChatLoading}
+                                        className="px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1"
+                                    >
+                                        <Send className="w-4 h-4" />
+                                    </button>
+                                    {chatMessages.length > 0 && (
+                                        <button
+                                            onClick={() => setChatMessages([])}
+                                            title="履歴をクリア"
+                                            className="px-2 py-2 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-200 transition-colors"
+                                        >
+                                            <RotateCcw className="w-4 h-4" />
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
 

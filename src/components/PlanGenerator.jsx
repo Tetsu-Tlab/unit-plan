@@ -156,7 +156,7 @@ const QUICK_CHIPS = [
     { label: '⏱️ 授業時数を1時間削減', instruction: '授業時数を1時間削減し、学習の流れが自然になるよう調整してください。' },
 ];
 
-const GEMINI_PROXY = 'https://tlab-api-drab.vercel.app/api/gemini';
+const GEMINI_PROXY = 'https://tlab-api-3w6m.vercel.app/api/gemini';
 
 const PlanGenerator = () => {
     const { apiKey, saveApiKey } = useApiKeyBridge();

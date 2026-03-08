@@ -198,6 +198,13 @@ const PlanGenerator = () => {
     const fileInputRef = useRef(null);
     const previewRef = useRef(null);
 
+    // ステップインジケーター用セクションref
+    const stepRef1 = useRef(null); // 単元基本情報（基本設定）
+    const stepRef2 = useRef(null); // 研究構想図
+    const stepRef3 = useRef(null); // こだわり入力
+    const stepRef4 = useRef(null); // 教材・指導要領
+    const stepRef5 = useRef(null); // 生成ボタン
+
     // Generation State
     const [generatedPlan, setGeneratedPlan] = useState('');
     const [isLoading, setIsLoading] = useState(false);
@@ -296,6 +303,32 @@ const PlanGenerator = () => {
 
     // 入力済み項目数
     const filledCount = TEACHER_QUESTIONS.filter(q => teacherProfile[q.key]?.trim()).length;
+
+    // ステップ完了判定
+    const stepDone = (n) => {
+        if (n === 1) return !!(grade || subject || unitName);
+        if (n === 2) return researchFiles.length > 0 || !!researchTextContent;
+        if (n === 3) return filledCount > 0;
+        if (n === 4) return !!guideContent || attachedFiles.length > 0;
+        if (n === 5) return !!generatedPlan;
+        return false;
+    };
+    const currentStep = (() => {
+        if (layoutMode === 'refine' || generatedPlan) return 6;
+        if (isLoading) return 5;
+        if (guideContent || attachedFiles.length > 0) return 5;
+        if (filledCount > 0) return 4;
+        if (researchFiles.length > 0 || researchTextContent) return 3;
+        if (grade || subject || unitName) return 2;
+        return 1;
+    })();
+    const scrollToStep = (n) => {
+        setLayoutMode('design');
+        const refs = [null, stepRef1, stepRef2, stepRef3, stepRef4, stepRef5];
+        setTimeout(() => {
+            refs[n]?.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 50);
+    };
 
     // 履歴に保存
     const saveToHistory = (plan, label) => {
@@ -774,28 +807,39 @@ Markdown形式で出力してください。
                         { step: 5, label: '生成', mode: 'design' },
                         { step: 6, label: 'AI精錬', mode: 'refine' },
                     ].map((s, i, arr) => {
-                        const isRefineStep = s.mode === 'refine';
-                        const isActive = layoutMode === 'refine' ? isRefineStep : (s.step <= 5);
-                        const isCurrent = layoutMode === 'refine' ? isRefineStep : s.step === 5;
+                        const isRefine = s.mode === 'refine';
+                        const isCurrent = s.step === currentStep;
+                        const isDone = !isRefine && stepDone(s.step);
+                        const isLocked = isRefine ? !generatedPlan : false;
                         return (
                             <React.Fragment key={s.step}>
                                 <button
-                                    onClick={() => { if (s.mode === 'design') setLayoutMode('design'); else if (generatedPlan) setLayoutMode('refine'); }}
+                                    onClick={() => {
+                                        if (isRefine) { if (generatedPlan) setLayoutMode('refine'); }
+                                        else scrollToStep(s.step);
+                                    }}
+                                    disabled={isLocked}
                                     className={cn(
                                         "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-all",
                                         isCurrent
                                             ? "bg-indigo-600 text-white shadow-sm"
-                                            : isActive && !isRefineStep
-                                            ? "bg-indigo-50 text-indigo-600"
-                                            : isRefineStep && generatedPlan
+                                            : isDone
+                                            ? "bg-indigo-50 text-indigo-500 hover:bg-indigo-100"
+                                            : isRefine && generatedPlan
                                             ? "bg-emerald-50 text-emerald-600 hover:bg-emerald-100"
-                                            : "text-slate-400 cursor-default"
+                                            : isLocked
+                                            ? "text-slate-300 cursor-default"
+                                            : "text-slate-400 hover:bg-slate-50"
                                     )}
                                 >
                                     <span className={cn(
                                         "w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-black shrink-0",
-                                        isCurrent ? "bg-white text-indigo-600" : "bg-current/20"
-                                    )}>{s.step}</span>
+                                        isCurrent ? "bg-white text-indigo-600"
+                                        : isDone ? "bg-indigo-500 text-white"
+                                        : "bg-current/20"
+                                    )}>
+                                        {isDone ? '✓' : s.step}
+                                    </span>
                                     {s.label}
                                 </button>
                                 {i < arr.length - 1 && <ChevronRight className="w-3 h-3 text-slate-300 shrink-0" />}
@@ -889,7 +933,7 @@ Markdown形式で出力してください。
                     {/* Research & Vision */}
                     <div className="grid grid-cols-1 gap-4">
                         {/* 研究構想図アップロード */}
-                        <div className="bg-gradient-to-br from-violet-600 to-indigo-700 rounded-xl shadow-float text-white p-6 relative overflow-hidden group">
+                        <div ref={stepRef2} className="bg-gradient-to-br from-violet-600 to-indigo-700 rounded-xl shadow-float text-white p-6 relative overflow-hidden group">
                             <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
                                 <School className="w-24 h-24" />
                             </div>
@@ -954,6 +998,7 @@ Markdown形式で出力してください。
 
                         {/* 先生のこだわり・パーソナライズ */}
                         <button
+                            ref={stepRef3}
                             onClick={() => setShowTeacherModal(true)}
                             className="bg-gradient-to-br from-pink-500 to-rose-600 rounded-xl shadow-float text-white p-6 relative overflow-hidden group text-left w-full transition-all hover:shadow-xl hover:scale-[1.01]"
                         >
@@ -987,7 +1032,7 @@ Markdown形式で出力してください。
                     </div>
 
                     {/* Unit Context */}
-                    <div className="bg-white rounded-xl shadow-premium p-6 space-y-4 border border-slate-100">
+                    <div ref={stepRef1} className="bg-white rounded-xl shadow-premium p-6 space-y-4 border border-slate-100">
                         <h3 className="font-bold text-slate-700 flex items-center gap-2 mb-2">
                             <GraduationCap className="w-5 h-5 text-indigo-500" /> 単元基本情報
                         </h3>
@@ -1055,7 +1100,7 @@ Markdown形式で出力してください。
                     </div>
 
                     {/* Resources Upload */}
-                    <div className="bg-white rounded-xl shadow-premium p-6 space-y-4 border border-slate-100">
+                    <div ref={stepRef4} className="bg-white rounded-xl shadow-premium p-6 space-y-4 border border-slate-100">
                         <h3 className="font-bold text-slate-700 flex items-center gap-2 mb-2">
                             <FileText className="w-5 h-5 text-emerald-500" /> 学習指導要領・教材資料
                         </h3>
@@ -1116,6 +1161,7 @@ Markdown形式で出力してください。
                     </div>
 
                     <button
+                        ref={stepRef5}
                         onClick={handleGenerate}
                         disabled={isLoading || !aiEnabled}
                         className={cn(

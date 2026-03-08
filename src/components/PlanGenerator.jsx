@@ -156,6 +156,8 @@ const QUICK_CHIPS = [
     { label: '⏱️ 授業時数を1時間削減', instruction: '授業時数を1時間削減し、学習の流れが自然になるよう調整してください。' },
 ];
 
+const GEMINI_PROXY = 'https://tlab-api.vercel.app/api/gemini';
+
 const PlanGenerator = () => {
     const { apiKey, saveApiKey } = useApiKeyBridge();
     const setApiKey = saveApiKey; // 既存コードとの互換性を保つ
@@ -334,8 +336,8 @@ const PlanGenerator = () => {
     const handleChatSend = async (instruction) => {
         const text = (instruction || chatInput).trim();
         if (!text || !generatedPlan) return;
-        if (!aiEnabled || !apiKey) {
-            alert('AIがOFFまたはAPIキー未設定です。');
+        if (!aiEnabled) {
+            alert('AIがOFFになっています。');
             return;
         }
 
@@ -359,14 +361,11 @@ ${generatedPlan}
 上記の修正依頼に従い、単元指導計画を修正してください。
 修正後の完全な計画のみをMarkdown形式で出力してください。説明文・前置きは一切不要です。`;
 
-            const res = await fetch(
-                `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-                {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
-                }
-            );
+            const res = await fetch(GEMINI_PROXY, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model, contents: [{ parts: [{ text: prompt }] }] })
+            });
             const data = await res.json();
             if (data.error) throw new Error(data.error.message);
 
@@ -463,41 +462,31 @@ ${generatedPlan}
         setConnectionStatus('idle');
     };
 
-    // APIキーが設定されたら自動でモデル一覧を取得→最適モデルを自動選択
+    // 起動時にプロキシ経由でモデル一覧を取得→最適モデルを自動選択
     useEffect(() => {
-        if (!apiKey) return;
         setConnectionStatus('testing');
-        fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`)
+        const score = (name) => {
+            let s = 0;
+            if (name.includes('2.5')) s += 300;
+            else if (name.includes('2.0')) s += 200;
+            else if (name.includes('1.5')) s += 100;
+            if (name.includes('flash')) s += 10;
+            return s;
+        };
+        fetch(GEMINI_PROXY)
             .then(r => r.json())
             .then(data => {
-                if (data.error) throw new Error(data.error.message);
-                const valid = (data.models || []).filter(m =>
-                    m.name.includes('gemini') &&
-                    m.supportedGenerationMethods?.includes('generateContent') &&
-                    !m.name.includes('embedding') &&
-                    !m.name.includes('aqa')
-                );
-                if (valid.length === 0) throw new Error('No valid models');
-                // バージョン番号が高い順・flashを優先してスコアリング
-                const score = (name) => {
-                    let s = 0;
-                    if (name.includes('2.5')) s += 300;
-                    else if (name.includes('2.0')) s += 200;
-                    else if (name.includes('1.5')) s += 100;
-                    if (name.includes('flash')) s += 10;
-                    return s;
-                };
-                const best = valid
-                    .map(m => m.name.replace('models/', ''))
+                if (data.error) throw new Error(data.error);
+                const best = (data.models || [])
+                    .map(m => m.name)
                     .sort((a, b) => score(b) - score(a))[0];
-                setModel(best);
+                if (best) setModel(best);
                 setConnectionStatus('success');
             })
             .catch(() => {
                 setConnectionStatus('error');
-                setModel('gemini-2.0-flash'); // フォールバック
             });
-    }, [apiKey]);
+    }, []);
 
     // File Handling
     const handleFileUpload = async (e) => {
@@ -545,10 +534,6 @@ ${generatedPlan}
     const handleGenerate = async () => {
         if (!aiEnabled) {
             alert('AIがOFFになっています。ヘッダーのトグルボタンでONにしてください。');
-            return;
-        }
-        if (!apiKey) {
-            alert('APIキーが未設定です。Nova Lab Pro の「設定・連携」タブでGemini APIキーを登録してください。');
             return;
         }
 
@@ -610,13 +595,10 @@ Markdown形式で出力してください。
                 parts.push({ inlineData: { mimeType: file.mimeType, data: file.data } });
             });
 
-            // Use selected model
-            const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
+            const response = await fetch(GEMINI_PROXY, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    contents: [{ parts: parts }]
-                })
+                body: JSON.stringify({ model, contents: [{ parts }] })
             });
 
             const data = await response.json();

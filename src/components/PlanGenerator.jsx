@@ -163,12 +163,7 @@ const PlanGenerator = () => {
     const [aiEnabled, setAiEnabled] = useState(() =>
         localStorage.getItem('unitplan_ai_enabled') !== 'false'
     );
-    const [model, setModel] = useState('gemini-1.5-flash'); // Default stable model
-    const [availableModels, setAvailableModels] = useState([
-        { name: 'gemini-1.5-flash', displayName: 'Gemini 1.5 Flash (推奨)' },
-        { name: 'gemini-1.5-pro', displayName: 'Gemini 1.5 Pro' },
-        { name: 'gemini-2.0-flash', displayName: 'Gemini 2.0 Flash' },
-    ]);
+    const [model, setModel] = useState('gemini-2.0-flash'); // fallback default
     const [connectionStatus, setConnectionStatus] = useState('idle'); // idle, testing, success, error
 
     // Context State
@@ -468,50 +463,41 @@ ${generatedPlan}
         setConnectionStatus('idle');
     };
 
-    const testConnection = async () => {
+    // APIキーが設定されたら自動でモデル一覧を取得→最適モデルを自動選択
+    useEffect(() => {
         if (!apiKey) return;
         setConnectionStatus('testing');
-        try {
-            // 1. First, fetch available models for this key
-            const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
-            const data = await response.json();
-
-            if (data.error) throw new Error(data.error.message);
-
-            // 2. Filter for generating content models
-            const validModels = data.models.filter(m =>
-                m.name.includes('gemini') &&
-                m.supportedGenerationMethods.includes('generateContent')
-            );
-
-            if (validModels.length === 0) throw new Error('使用可能なGeminiモデルが見つかりませんでした');
-
-            // 3. Format for select dropdown
-            const formattedModels = validModels.map(m => ({
-                name: m.name.replace('models/', ''), // remove prefix for cleaner ID
-                displayName: m.displayName || m.name
-            })).sort((a, b) => {
-                // Prioritize Flash 1.5
-                if (a.name.includes('1.5-flash') && !b.name.includes('1.5-flash')) return -1;
-                if (!a.name.includes('1.5-flash') && b.name.includes('1.5-flash')) return 1;
-                return 0;
+        fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`)
+            .then(r => r.json())
+            .then(data => {
+                if (data.error) throw new Error(data.error.message);
+                const valid = (data.models || []).filter(m =>
+                    m.name.includes('gemini') &&
+                    m.supportedGenerationMethods?.includes('generateContent') &&
+                    !m.name.includes('embedding') &&
+                    !m.name.includes('aqa')
+                );
+                if (valid.length === 0) throw new Error('No valid models');
+                // バージョン番号が高い順・flashを優先してスコアリング
+                const score = (name) => {
+                    let s = 0;
+                    if (name.includes('2.5')) s += 300;
+                    else if (name.includes('2.0')) s += 200;
+                    else if (name.includes('1.5')) s += 100;
+                    if (name.includes('flash')) s += 10;
+                    return s;
+                };
+                const best = valid
+                    .map(m => m.name.replace('models/', ''))
+                    .sort((a, b) => score(b) - score(a))[0];
+                setModel(best);
+                setConnectionStatus('success');
+            })
+            .catch(() => {
+                setConnectionStatus('error');
+                setModel('gemini-2.0-flash'); // フォールバック
             });
-
-            setAvailableModels(formattedModels);
-
-            // 4. Update current model if needed
-            const currentExists = formattedModels.find(m => m.name === model);
-            if (!currentExists && formattedModels.length > 0) {
-                setModel(formattedModels[0].name);
-            }
-
-            setConnectionStatus('success');
-            setTimeout(() => setShowSettings(false), 1500); // Auto close
-        } catch (err) {
-            console.error(err);
-            setConnectionStatus('error');
-        }
-    };
+    }, [apiKey]);
 
     // File Handling
     const handleFileUpload = async (e) => {
@@ -879,52 +865,44 @@ Markdown形式で出力してください。
                                         <Settings className="w-4 h-4" /> システム設定
                                     </h3>
 
-                                    <div className="space-y-4">
-                                        <div>
-                                            <label className="block text-xs font-semibold uppercase text-slate-500 mb-1">使用モデル</label>
-                                            <select
-                                                value={model}
-                                                onChange={(e) => setModel(e.target.value)}
-                                                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none text-sm"
-                                            >
-                                                {availableModels.map((m) => (
-                                                    <option key={m.name} value={m.name}>
-                                                        {m.displayName}
-                                                    </option>
-                                                ))}
-                                            </select>
-                                            {connectionStatus === 'success' && (
-                                                <p className="text-[10px] text-emerald-600 mt-1 text-right">
-                                                    ✨ お使いのキーで利用可能なモデルを自動取得しました
-                                                </p>
-                                            )}
-                                        </div>
-
-                                        {/* APIキーはNova Lab Proから自動連携 */}
+                                    <div className="space-y-3">
+                                        {/* APIキー接続状態 */}
                                         <div className={cn(
-                                            "flex items-center gap-3 p-3 rounded-lg border",
-                                            apiKey
+                                            "flex items-start gap-3 p-3 rounded-lg border",
+                                            apiKey && connectionStatus !== 'error'
                                                 ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+                                                : connectionStatus === 'error'
+                                                ? "bg-red-50 border-red-200 text-red-800"
                                                 : "bg-amber-50 border-amber-200 text-amber-800"
                                         )}>
                                             <div className={cn(
-                                                "w-2.5 h-2.5 rounded-full shrink-0",
-                                                apiKey ? "bg-emerald-500" : "bg-amber-400 animate-pulse"
+                                                "w-2.5 h-2.5 rounded-full shrink-0 mt-0.5",
+                                                connectionStatus === 'testing' ? "bg-blue-400 animate-pulse"
+                                                : connectionStatus === 'success' ? "bg-emerald-500"
+                                                : connectionStatus === 'error' ? "bg-red-500"
+                                                : apiKey ? "bg-emerald-500" : "bg-amber-400 animate-pulse"
                                             )} />
                                             <div className="text-xs font-semibold leading-snug">
-                                                {apiKey
-                                                    ? <>Gemini APIキー連携済み<br /><span className="font-normal opacity-70">Nova Lab Pro から自動取得</span></>
-                                                    : <>APIキー未取得<br /><span className="font-normal">Nova Lab Pro の「設定・連携」でキーを登録してください</span></>
-                                                }
+                                                {!apiKey ? (
+                                                    <>APIキー未取得<br /><span className="font-normal">Nova Lab Pro の「設定・連携」でキーを登録してください</span></>
+                                                ) : connectionStatus === 'testing' ? (
+                                                    <>モデルを自動検出中...</>
+                                                ) : connectionStatus === 'error' ? (
+                                                    <>接続エラー<br /><span className="font-normal">APIキーを確認してください</span></>
+                                                ) : (
+                                                    <>
+                                                        Gemini APIキー連携済み<br />
+                                                        <span className="font-normal opacity-70">Nova Lab Pro から自動取得</span>
+                                                        {model && (
+                                                            <span className="block mt-1 font-normal">
+                                                                使用モデル: <span className="font-bold">{model}</span>（自動選択）
+                                                            </span>
+                                                        )}
+                                                    </>
+                                                )}
                                             </div>
                                         </div>
                                     </div>
-                                    {connectionStatus === 'error' && (
-                                        <p className="text-xs text-red-500 bg-red-50 p-2 rounded">
-                                            接続に失敗しました。キーが正しいか、またはモデルが利用可能か確認してください。<br />
-                                            ※古いモデル(1.0 pro等)は廃止された可能性があります。
-                                        </p>
-                                    )}
                                 </div>
                             </motion.div>
                         )}
